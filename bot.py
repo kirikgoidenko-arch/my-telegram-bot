@@ -1,7 +1,7 @@
 import asyncio
 import os
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import aiosqlite
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -12,7 +12,6 @@ from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# ===================== НАСТРОЙКИ =====================
 load_dotenv()
 BOT_TOKEN = os.getenv("TOKEN")
 
@@ -24,9 +23,8 @@ DB_PATH = "habits_final.db"
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 scheduler = AsyncIOScheduler()
-# ====================================================
 
-# ===================== БАЗА ДАННЫХ =====================
+
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
@@ -44,59 +42,77 @@ async def init_db():
         """)
         await db.commit()
 
-# ... (остальные функции add_item, get_user_items и т.д. оставляем как были)
 
-# Добавь эти новые функции в конец файла (перед @dp.message)
+# ================== ОСНОВНЫЕ ФУНКЦИИ ==================
+async def add_item(user_id, item_type, category, text, schedule):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO items (user_id, type, category, text, schedule) VALUES (?, ?, ?, ?, ?)",
+            (user_id, item_type, category, text, schedule)
+        )
+        await db.commit()
+
+
+async def get_user_items(user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT id, type, category, text, schedule, streak FROM items WHERE user_id = ? AND is_active = 1",
+            (user_id,)
+        )
+        return await cursor.fetchall()
+
+
 async def delete_item(item_id):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE items SET is_active = 0 WHERE id = ?", (item_id,))
         await db.commit()
 
-async def get_item_by_id(item_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("SELECT * FROM items WHERE id = ?", (item_id,))
-        return await cursor.fetchone()
 
-# ===================== ХЕНДЛЕРЫ =====================
+# ================== НОВЫЕ ФУНКЦИИ ==================
+async def get_week_stats(user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT text, streak FROM items WHERE user_id = ? AND is_active = 1 AND type = 'habit'",
+            (user_id,)
+        )
+        return await cursor.fetchall()
+
+
+# ================== ХЕНДЛЕРЫ ==================
 @dp.message(CommandStart())
 async def start(message: Message):
-    await message.answer(
-        "Привет! 👋\n\n"
-        "Бот для привычек и задач.\n\n"
-        "Команды:\n"
-        "/list — список\n"
-        "/today — на сегодня\n"
-        "/stats — статистика\n"
-        "/delete — удалить"
-    )
+    kb = InlineKeyboardBuilder()
+    kb.button(text="➕ Добавить привычку", callback_data="add_habit")
+    kb.button(text="➕ Добавить задачу", callback_data="add_task")
+    kb.adjust(1)
+    await message.answer("Добро пожаловать!", reply_markup=kb.as_markup())
 
-# ... (остальные хендлеры handle_add, list_items, today, stats оставь как были)
 
-@dp.message(Command("delete"))
-async def delete_command(message: Message):
-    items = await get_user_items(message.from_user.id)
+@dp.callback_query(F.data == "add_habit")
+async def add_habit_callback(callback: CallbackQuery):
+    await callback.message.answer("Напиши привычку и время:\nПример: <b>Зарядка 07:30</b>", parse_mode="HTML")
+
+
+@dp.callback_query(F.data == "add_task")
+async def add_task_callback(callback: CallbackQuery):
+    await callback.message.answer("Напиши задачу и дату+время:\nПример: <b>Врач 15.07 14:00</b>", parse_mode="HTML")
+
+
+# (Остальные хендлеры handle_add, list, today, stats, delete — оставь как в предыдущей версии)
+
+@dp.message(Command("stats"))
+async def stats(message: Message):
+    items = await get_week_stats(message.from_user.id)
     if not items:
-        await message.answer("Нечего удалять.")
+        await message.answer("Статистики пока нет.")
         return
 
-    kb = InlineKeyboardBuilder()
-    for item_id, item_type, category, text, schedule, streak in items:
-        emoji = "🔄" if item_type == "habit" else "📅"
-        kb.button(text=f"{emoji} {text[:25]}...", callback_data=f"del_{item_id}")
-    kb.adjust(1)
-    await message.answer("Что удалить?", reply_markup=kb.as_markup())
+    text = "📊 Статистика привычек:\n\n"
+    for text_item, streak in items:
+        text += f"• {text_item}: {streak} дней подряд 🔥\n"
+    await message.answer(text)
 
-@dp.callback_query(F.data.startswith("del_"))
-async def confirm_delete(callback: CallbackQuery):
-    item_id = int(callback.data.split("_")[1])
-    item = await get_item_by_id(item_id)
-    if item:
-        await delete_item(item_id)
-        await callback.message.edit_text(f"✅ Удалено: {item[4]}")
-    else:
-        await callback.message.edit_text("❌ Не найдено.")
 
-# ===================== ЗАПУСК =====================
 async def main():
     await init_db()
     scheduler.add_job(send_reminders, "interval", minutes=1)
@@ -108,7 +124,7 @@ async def main():
     except:
         pass
     
-    print("✅ Бот запущен...")
+    print("✅ Бот запущен с новыми функциями...")
     await dp.start_polling(bot)
 
 
