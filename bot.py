@@ -31,16 +31,17 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
-                type TEXT,                    -- 'habit' или 'task'
+                type TEXT,
                 category TEXT DEFAULT 'Другое',
                 text TEXT,
-                schedule TEXT,                -- для привычки: "07:30", для задачи: "2026-07-15 14:00"
+                schedule TEXT,
                 streak INTEGER DEFAULT 0,
                 last_completed TEXT,
                 is_active INTEGER DEFAULT 1
             )
         """)
         await db.commit()
+
 
 
 async def add_item(user_id, item_type, category, text, schedule):
