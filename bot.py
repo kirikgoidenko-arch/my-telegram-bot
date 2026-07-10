@@ -246,9 +246,13 @@ async def main():
     await init_db()
     scheduler.add_job(send_reminders, "interval", minutes=1)
     scheduler.start()
+    
     print("✅ Бот успешно запущен...")
+    await on_startup()                    # ← добавь эту строку
     await dp.start_polling(bot)
 
-
+async def on_startup():
+    await bot.delete_webhook(drop_pending_updates=True)
+    print("✅ Webhook удалён, бот запущен в режиме polling")
 if __name__ == "__main__":
     asyncio.run(main())
