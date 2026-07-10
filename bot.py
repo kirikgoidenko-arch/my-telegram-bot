@@ -67,12 +67,6 @@ async def delete_item(item_id):
         await db.commit()
 
 
-async def get_item_by_id(item_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("SELECT * FROM items WHERE id = ?", (item_id,))
-        return await cursor.fetchone()
-
-
 async def send_reminders():
     now = datetime.now()
     current_time = now.strftime("%H:%M")
@@ -120,22 +114,95 @@ async def send_reminders():
             pass
 
 
-# ================== ХЕНДЛЕРЫ ==================
+# ===================== КОМАНДЫ =====================
 @dp.message(CommandStart())
 async def start(message: Message):
-    await message.answer("Привет! Бот запущен.\n\nКоманды: /list /today /stats /delete")
+    text = (
+        "👋 <b>Бот Привычек и Задач</b>\n\n"
+        "Что я умею:\n"
+        "• Добавлять ежедневные привычки (с напоминаниями)\n"
+        "• Добавлять разовые задачи с датой\n"
+        "• Отправлять напоминания в заданное время\n"
+        "• Вести статистику (стрики)\n"
+        "• Удалять записи\n\n"
+        "<b>Как добавлять:</b>\n"
+        "Привычка: <code>Зарядка 07:30</code>\n"
+        "Задача: <code>Врач 15.07 14:00</code>\n\n"
+        "<b>Команды:</b>\n"
+        "/list — список всех дел\n"
+        "/today — дела на сегодня\n"
+        "/stats — статистика\n"
+        "/delete — удалить запись\n\n"
+        "Нажми /start чтобы увидеть это сообщение снова."
+    )
+    await message.answer(text, parse_mode="HTML")
+
+
+@dp.message(F.text & ~F.text.startswith("/"))
+async def handle_add(message: Message):
+    text = message.text.strip()
+    parts = text.rsplit(" ", 1)
+    if len(parts) != 2:
+        await message.answer("❌ Неверный формат.\n\nПример:\nЗарядка 07:30\nВрач 15.07 14:00")
+        return
+
+    item_text, time_part = parts
+    user_id = message.from_user.id
+    category = "Другое"
+
+    if "." in time_part:
+        try:
+            date_part, t = time_part.split(" ", 1) if " " in time_part else (time_part, "09:00")
+            day, month = date_part.split(".")
+            schedule = f"2026-{month.zfill(2)}-{day.zfill(2)} {t}"
+            await add_item(user_id, "task", category, item_text, schedule)
+            await message.answer(f"✅ Задача добавлена: {item_text}")
+        except:
+            await message.answer("❌ Неверный формат даты")
+    else:
+        await add_item(user_id, "habit", category, item_text, time_part)
+        await message.answer(f"✅ Привычка добавлена: {item_text} в {time_part}")
 
 
 @dp.message(Command("list"))
 async def list_items(message: Message):
     items = await get_user_items(message.from_user.id)
     if not items:
-        await message.answer("Ничего нет.")
+        await message.answer("У тебя пока ничего нет.")
         return
-    text = "Твои дела:\n\n"
+    text = "📋 <b>Твои дела:</b>\n\n"
     for _, t, c, txt, s, st in items:
-        text += f"• [{c}] {txt} — {s}\n"
-    await message.answer(text)
+        streak = f" 🔥 {st}" if t == "habit" and st > 0 else ""
+        text += f"• [{c}] {txt} — {s}{streak}\n"
+    await message.answer(text, parse_mode="HTML")
+
+
+@dp.message(Command("today"))
+async def today(message: Message):
+    today_date = datetime.now().strftime("%Y-%m-%d")
+    items = await get_user_items(message.from_user.id)
+    text = "📅 <b>На сегодня:</b>\n\n"
+    found = False
+    for _, t, c, txt, s, st in items:
+        if t == "task" and today_date in s or t == "habit":
+            text += f"• {txt} ({s})\n"
+            found = True
+    if not found:
+        text += "Ничего нет."
+    await message.answer(text, parse_mode="HTML")
+
+
+@dp.message(Command("stats"))
+async def stats(message: Message):
+    items = await get_user_items(message.from_user.id)
+    if not items:
+        await message.answer("Статистики пока нет.")
+        return
+    text = "📊 <b>Статистика привычек:</b>\n\n"
+    for _, t, _, txt, _, st in items:
+        if t == "habit":
+            text += f"• {txt}: {st} дней подряд 🔥\n"
+    await message.answer(text, parse_mode="HTML")
 
 
 @dp.message(Command("delete"))
@@ -146,21 +213,21 @@ async def delete_command(message: Message):
         return
     kb = InlineKeyboardBuilder()
     for item_id, _, _, text, _, _ in items:
-        kb.button(text=text[:30], callback_data=f"del_{item_id}")
+        kb.button(text=text[:25] + "...", callback_data=f"del_{item_id}")
     kb.adjust(1)
-    await message.answer("Выбери что удалить:", reply_markup=kb.as_markup())
+    await message.answer("Выберите, что удалить:", reply_markup=kb.as_markup())
 
 
 @dp.callback_query(F.data.startswith("del_"))
 async def confirm_delete(callback: CallbackQuery):
     item_id = int(callback.data.split("_")[1])
     await delete_item(item_id)
-    await callback.message.edit_text("✅ Удалено")
+    await callback.message.edit_text("✅ Запись удалена")
 
 
 @dp.callback_query(F.data.startswith("done_"))
 async def done(callback: CallbackQuery):
-    await callback.message.edit_text("✅ Отлично!")
+    await callback.message.edit_text("✅ Молодец! Продолжай в том же духе!")
 
 
 @dp.callback_query(F.data.startswith("skip_"))
@@ -179,7 +246,7 @@ async def main():
     except:
         pass
     
-    print("✅ Бот успешно запущен!")
+    print("✅ Бот запущен!")
     await dp.start_polling(bot)
 
 
