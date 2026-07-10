@@ -7,7 +7,7 @@ import aiosqlite
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -67,25 +67,28 @@ async def delete_item(item_id):
         await db.commit()
 
 
+# ===================== НАПОМИНАНИЯ =====================
 async def send_reminders():
-    # (оставляем как было)
     now = datetime.now()
     current_time = now.strftime("%H:%M")
     current_date = now.strftime("%Y-%m-%d")
 
     async with aiosqlite.connect(DB_PATH) as db:
+        # Привычки (по времени)
         cursor = await db.execute(
             "SELECT id, user_id, text, category, streak FROM items WHERE type = 'habit' AND schedule = ? AND is_active = 1",
             (current_time,)
         )
         habits = await cursor.fetchall()
 
+        # Задачи на сегодня
         cursor = await db.execute(
             "SELECT id, user_id, text, category FROM items WHERE type = 'task' AND schedule LIKE ? AND is_active = 1",
             (f"{current_date}%",)
         )
         tasks = await cursor.fetchall()
 
+    # Отправляем привычки
     for item_id, user_id, text, category, streak in habits:
         try:
             kb = InlineKeyboardBuilder()
@@ -94,7 +97,21 @@ async def send_reminders():
             streak_text = f" 🔥 {streak} дней" if streak > 0 else ""
             await bot.send_message(
                 user_id,
-                f"⏰ {current_time} | {category}\n\n<b>{text}</b>{streak_text}",
+                f"⏰ <b>Напоминание!</b>\n\n{current_time} | {category}\n\n{text}{streak_text}",
+                reply_markup=kb.as_markup(),
+                parse_mode="HTML"
+            )
+        except:
+            pass
+
+    # Отправляем задачи
+    for item_id, user_id, text, category in tasks:
+        try:
+            kb = InlineKeyboardBuilder()
+            kb.button(text="✅ Сделано", callback_data=f"done_{item_id}")
+            await bot.send_message(
+                user_id,
+                f"📅 <b>Задача на сегодня!</b>\n\n{category}\n\n{text}",
                 reply_markup=kb.as_markup(),
                 parse_mode="HTML"
             )
@@ -109,8 +126,8 @@ def main_menu():
     kb.button(text="📅 На сегодня", callback_data="show_today")
     kb.button(text="📊 Статистика", callback_data="show_stats")
     kb.button(text="🗑 Удалить", callback_data="show_delete")
-    kb.button(text="➕ Добавить привычку", callback_data="add_habit")
-    kb.button(text="➕ Добавить задачу", callback_data="add_task")
+    kb.button(text="➕ Привычка", callback_data="add_habit")
+    kb.button(text="➕ Задача", callback_data="add_task")
     kb.adjust(2)
     return kb.as_markup()
 
@@ -118,94 +135,35 @@ def main_menu():
 @dp.message(CommandStart())
 async def start(message: Message):
     await message.answer(
-        "👋 <b>Добро пожаловать в Бот Привычек!</b>\n\n"
-        "Управляй привычками и задачами через кнопки ниже 👇",
+        "👋 <b>Бот Привычек и Задач</b>\n\n"
+        "Бот будет присылать уведомления автоматически в заданное время.\n\n"
+        "Выбери действие ниже 👇",
         reply_markup=main_menu(),
         parse_mode="HTML"
     )
 
 
-@dp.callback_query(F.data == "show_list")
-async def show_list(callback: CallbackQuery):
-    items = await get_user_items(callback.from_user.id)
-    if not items:
-        await callback.message.edit_text("У тебя пока ничего нет.", reply_markup=main_menu())
-        return
-    text = "📋 <b>Твои дела:</b>\n\n"
-    for _, t, c, txt, s, st in items:
-        streak = f" 🔥 {st}" if t == "habit" and st > 0 else ""
-        text += f"• [{c}] {txt} — {s}{streak}\n"
-    await callback.message.edit_text(text, reply_markup=main_menu(), parse_mode="HTML")
-
-
-@dp.callback_query(F.data == "show_today")
-async def show_today(callback: CallbackQuery):
-    # аналогично /today
-    await callback.message.edit_text("📅 На сегодня пока нет реализации. Скоро добавим!", reply_markup=main_menu())
-
-
-@dp.callback_query(F.data == "show_stats")
-async def show_stats(callback: CallbackQuery):
-    items = await get_user_items(callback.from_user.id)
-    text = "📊 <b>Статистика:</b>\n\n"
-    has_habits = False
-    for _, t, _, txt, _, st in items:
-        if t == "habit":
-            text += f"• {txt}: {st} дней подряд 🔥\n"
-            has_habits = True
-    if not has_habits:
-        text += "Пока нет привычек."
-    await callback.message.edit_text(text, reply_markup=main_menu(), parse_mode="HTML")
-
-
 @dp.callback_query(F.data.in_(["add_habit", "add_task"]))
-async def add_item_callback(callback: CallbackQuery):
+async def add_callback(callback: CallbackQuery):
     if callback.data == "add_habit":
-        await callback.message.edit_text("Напиши привычку и время:\nПример: <b>Зарядка 07:30</b>", parse_mode="HTML")
+        await callback.message.edit_text("Напиши: <b>Название привычки ЧЧ:ММ</b>\nПример: Зарядка 07:30", parse_mode="HTML")
     else:
-        await callback.message.edit_text("Напиши задачу и дату:\nПример: <b>Врач 15.07 14:00</b>", parse_mode="HTML")
-
-
-@dp.callback_query(F.data == "show_delete")
-async def show_delete(callback: CallbackQuery):
-    items = await get_user_items(callback.from_user.id)
-    if not items:
-        await callback.message.edit_text("Нечего удалять.", reply_markup=main_menu())
-        return
-    kb = InlineKeyboardBuilder()
-    for item_id, _, _, text, _, _ in items:
-        kb.button(text=text[:25]+"...", callback_data=f"del_{item_id}")
-    kb.button(text="← Назад", callback_data="back_to_menu")
-    kb.adjust(1)
-    await callback.message.edit_text("Выберите, что удалить:", reply_markup=kb.as_markup())
-
-
-@dp.callback_query(F.data.startswith("del_"))
-async def confirm_delete(callback: CallbackQuery):
-    item_id = int(callback.data.split("_")[1])
-    await delete_item(item_id)
-    await callback.message.edit_text("✅ Удалено!", reply_markup=main_menu())
-
-
-@dp.callback_query(F.data == "back_to_menu")
-async def back_to_menu(callback: CallbackQuery):
-    await callback.message.edit_text("Главное меню:", reply_markup=main_menu())
+        await callback.message.edit_text("Напиши: <b>Название задачи ДД.ММ ЧЧ:ММ</b>\nПример: Врач 15.07 14:00", parse_mode="HTML")
 
 
 @dp.message(F.text & ~F.text.startswith("/"))
-async def handle_text(message: Message):
-    # обработка добавления привычек и задач
+async def handle_add(message: Message):
+    # ... (логика добавления как раньше)
     text = message.text.strip()
     parts = text.rsplit(" ", 1)
     if len(parts) != 2:
-        await message.answer("❌ Неверный формат. Попробуй ещё раз.")
+        await message.answer("❌ Неверный формат.")
         return
 
     item_text, time_part = parts
     user_id = message.from_user.id
 
     if "." in time_part:
-        # задача
         try:
             date_part, t = time_part.split(" ", 1) if " " in time_part else (time_part, "09:00")
             day, month = date_part.split(".")
@@ -215,14 +173,24 @@ async def handle_text(message: Message):
         except:
             await message.answer("❌ Неверный формат даты")
     else:
-        # привычка
         await add_item(user_id, "habit", "Другое", item_text, time_part)
-        await message.answer("✅ Привычка добавлена!", reply_markup=main_menu())
+        await message.answer("✅ Привычка добавлена! Напоминание будет приходить ежедневно.", reply_markup=main_menu())
+
+
+# Callback для кнопок "Сделано" и "Пропустить"
+@dp.callback_query(F.data.startswith("done_"))
+async def done(callback: CallbackQuery):
+    await callback.message.edit_text("✅ Отлично! Продолжай в том же духе 🔥")
+
+
+@dp.callback_query(F.data.startswith("skip_"))
+async def skip(callback: CallbackQuery):
+    await callback.message.edit_text("⏭ Пропущено")
 
 
 async def main():
     await init_db()
-    scheduler.add_job(send_reminders, "interval", minutes=1)
+    scheduler.add_job(send_reminders, "interval", minutes=1)   # проверка каждую минуту
     scheduler.start()
     
     try:
@@ -230,7 +198,7 @@ async def main():
     except:
         pass
     
-    print("✅ Бот с кнопками запущен!")
+    print("✅ Бот запущен с напоминаниями!")
     await dp.start_polling(bot)
 
 
