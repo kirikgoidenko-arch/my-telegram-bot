@@ -248,9 +248,15 @@ async def main():
     scheduler.start()
     
     print("✅ Бот успешно запущен...")
-    await on_startup()                    # ← добавь эту строку
+    
+    # Удаляем webhook при запуске
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        print("✅ Webhook успешно удалён")
+    except Exception as e:
+        print(f"⚠️ Не удалось удалить webhook: {e}")
+    
     await dp.start_polling(bot)
-
 async def on_startup():
     await bot.delete_webhook(drop_pending_updates=True)
     print("✅ Webhook удалён, бот запущен в режиме polling")
